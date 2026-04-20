@@ -11,7 +11,7 @@ import LifestyleForm from './LifestyleForm';
 import FullAnalysisResult from './FullAnalysisResult';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const API_URL_BASE = 'https://abhayr90-hair-loss-classifier-api.hf.space';
+const API_URL_BASE = 'https://rishi8603-hair-loss-api.hf.space';
 
 // ── Clean Icon Badge Component ──────────────────────────────────
 function IconBadge({ char, bg, color, size = 40 }) {
