@@ -45,6 +45,10 @@ STAGE_ZONE_SCORES = {
 
 app = FastAPI(title="Hair Loss Stage Classifier API")
 
+@app.get("/")
+def read_root():
+    return {"status": "TrichoVision API is Online", "version": "1.0.0"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
