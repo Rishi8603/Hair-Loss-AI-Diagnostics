@@ -16,7 +16,9 @@ load_dotenv()
 
 # Constants & Config
 
-ONNX_PATH = "models/stage_classifier.onnx"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ONNX_PATH = os.path.join(BASE_DIR, "models", "stage_classifier.onnx")
+
 NUM_CLASSES = 7
 
 STAGE_LABELS = {
