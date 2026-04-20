@@ -44,3 +44,9 @@ yarn-error.*
 scratch/
 test*/
 temp/
+
+# Report / Scratch Docs
+trichovision_report.tex
+reportRef.md
+newWork.txt
+soft_kebot_report.tex

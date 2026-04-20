@@ -1,4 +1,4 @@
-# 🧠 Soft-KEBOT — AI Hair Fall Stage Classifier
+# 🧠 TrichoVision — AI Hair Fall Stage Classifier
 
 <div align="center">
 
@@ -38,7 +38,7 @@
 
 ## 🔍 Overview
 
-**Soft-KEBOT** is a software-only adaptation of the KEBOT robotic hair transplant analysis system. Instead of relying on a $30,000+ robotic arm, it uses a **USB dermatoscope** + **deep learning** to classify hair fall stages based on the **Norwood-Hamilton Scale**.
+**TrichoVision** is a software-only adaptation of the KEBOT robotic hair transplant analysis system. Instead of relying on a $30,000+ robotic arm, it uses a **USB dermatoscope** + **deep learning** to classify hair fall stages based on the **Norwood-Hamilton Scale**.
 
 The system takes a scalp image as input and outputs a predicted hair fall stage (1–7) with a confidence percentage — accessible from any smartphone via a clean mobile app.
 
@@ -66,7 +66,7 @@ The system takes a scalp image as input and outputs a predicted hair fall stage 
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                  SOFT-KEBOT SYSTEM                  │
+│                  TRICHOVISION SYSTEM                │
 ├────────────────────┬────────────────────────────────┤
 │   MOBILE APP       │        BACKEND SERVER           │
 │  React Native      │  FastAPI + ONNX Runtime         │
@@ -379,6 +379,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 **Built with ❤️ as a Final Year Deep Learning Project**
 
-*Soft-KEBOT — Bridging AI and Clinical Hair Analysis*
+*TrichoVision — Bridging AI and Clinical Hair Analysis*
 
 </div>
