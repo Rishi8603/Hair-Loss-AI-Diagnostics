@@ -1,3 +1,12 @@
+---
+title: TrichoVision Hair Loss API
+emoji: 🧠
+colorFrom: indigo
+colorTo: emerald
+sdk: docker
+app_port: 7860
+---
+
 # 🧠 TrichoVision — AI Hair Fall Stage Classifier
 
 <div align="center">
