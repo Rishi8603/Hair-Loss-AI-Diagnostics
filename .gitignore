@@ -1,0 +1,46 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment files
+*.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# API keys and secrets
+*api_key*
+*secret*
+credentials.json
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Expo / React Native
+node_modules/
+.expo/
+dist/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+# macOS
+.DS_Store
+
+# Temporary / Scratch files
+*.blend1
+*.blend2
+scratch/
+test*/
+temp/

@@ -1,0 +1,35 @@
+🌟 Soft-KEBOT: Master Project Documentation
+🧠 1. The Deep AI Diagnostic Engine (Backend)
+We transitioned the backend from statically returning generic results into a deeply contextual, LLM-driven clinical trichology analysis engine.
+
+LLM Migration & Scale: We upgraded from basic logic to gemini-2.5-flash for high-speed multi-angle visual assessment, and integrated Groq (Llama 3.3 70B) to power the advanced lifestyle analysis.
+The Lifestyle Questionnaire (LifestyleForm.js): Engineered a comprehensive 24-question form with custom stepper sliders and pill toggles to gather critical demographic, medical, and lifestyle data (e.g., stress, diet, sleep, hair care).
+Deep Analysis Endpoint (/analyse/full/): The backend now correlates the user's visual hair loss stage with their survey answers. It computes and returns deeply personalized outputs: dynamic risk_level, primary_causes, categorized recommendations, and a clinical prognosis.
+JSON Parsing Resilience: Hardened the backend to aggressively strip markdown formatting out of AI responses, preventing JSONDecodeError crashes.
+🌐 2. Advanced 3D Scalp Heatmap System (Head3DViewer.js)
+We completely ripped out brittle placeholder components and engineered a custom, cross-platform 3D visualization engine.
+
+Blender .obj Parsing: Re-wrote the internal object parser so it natively understands object groups (g / o) exported directly from Blender. The heatmap now perfectly targets the 6 distinct hair-bearing zones (e.g., FrontalScalp_body_low), leaving the face and neck mathematically hidden (neutral).
+Inverse Distance Weighting (IDW) Gradients: Replaced solid block colors with dynamic, per-vertex IDW gradient math. The colors smoothly scale based on AI density scores, blending perfectly between healthy (blue/green) and balding (red/orange) zones.
+Dynamic Decal Labels: Implemented Vector3.project tracking. Zone labels physically hover over the 3D head and use "Camera Occlusion" (Dot Product matrix math) to fade out and hide when rotated to the back of the head.
+Flawless Mobile Interactivity: Rebuilt the native renderer using expo-gl mixed with custom PanResponder velocity vectors (state.vx / state.vy). We fixed touch-blocking bugs, achieved buttery-smooth single-finger rotation on phones, and embedded a mathematical Two-Finger Pinch-to-Zoom feature for the app (with mouse-wheel zoom on Web).
+🎨 3. UI/UX Transformation: Premium Medical Interface
+We executed a complete visual overhaul, trading the old, dark interface for a clean, clinical aesthetic.
+
+"Premium Light" Theme Integration: Refined the entire UI into a cohesive Light Theme (#FAFBFD backgrounds, pure white cards, and Indigo/Emerald accents) replacing the deep navy.
+Professional Typography & Badges: Scrapped all inconsistent, platform-rendered emojis across the codebase. We implemented custom IconBadge elements (e.g., "S" for Stage, "DA" for Deep Analysis) and dynamic risk cards that change color (Green/Yellow/Red) based on the AI's confidence levels.
+Responsive Desktop Layouts: Forced the ScrollView to a clean maxWidth limit. Instead of stretching aggressively across desktop browsers, the app sits perfectly centered as a polished "mobile-width" hub.
+Smart UI Warnings: Built routing protections; if a user opens the 3D Viewer without letting the CNN predict the stage first, they are greeted by an amber caution banner warning them about accuracy constraints.
+📄 4. Universal PDF & Report Exporting
+We built a professional data-portability pipeline directly into the findings dashboard.
+
+Installed expo-print and expo-sharing.
+Web Logic: Clicking "Export as PDF" downloads a beautifully CSS-styled .html report directly to the desktop browser.
+Native App Logic (iOS/Android): Running on the phone, the exact same interaction silently generates a physical .pdf document and immediately launches the device's native "Share Sheet," allowing the user to seamlessly WhatsApp or email their medical report.
+🛠️ 5. Infrastructure, Reliability & Environment Tools
+Solved severe configuration bottlenecks and network crashes.
+
+API Route Stability: Eliminated the manual multipart/form-data headers in App.js that were destroying React Native’s boundary logic, ending the "infinite mobile loading spinner" bug.
+Network Throttling Wrappers: Deployed a custom fetchWithTimeout() logic guarding the Gemini and Groq API calls. If the mobile network fails, the user now receives a clean error rather than a dead app.
+Asset Bundling: Updated metro.config.js to ensure .obj and picture files are compiled directly into the Expo bundle correctly.
+VS Code & Python Environment Magic: Resolved the fatal "Python Environment Tools (PET)" bug breaking the Python 3.14 kernel in VS Code. Created custom .vscode/settings.json bypasses and locked all API keys safely into an isolated .env system.

@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "HairLossApp",
+    "slug": "HairLossApp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.rishi.HairLossApp"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "assetBundlePatterns": [
+      "assets/**"
+    ],
+    "plugins": [
+      "expo-sharing"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "0057d327-3f2c-4024-b200-ba1f0f300474"
+      }
+    },
+    "owner": "rishi8603"
+  }
+}

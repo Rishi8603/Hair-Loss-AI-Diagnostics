@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+onnxruntime
+pillow
+numpy
+google-generativeai
+python-dotenv
+groq
