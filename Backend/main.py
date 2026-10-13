@@ -1,11 +1,16 @@
 import io
 import os
 import json
+import re
 import traceback
 import numpy as np
 import onnxruntime as ort
 import google.generativeai as genai
-from PIL import Image
+from PIL import Image, ImageOps
+try:                                  # local run: uvicorn main:app (inside Backend/)
+    import zone_measure
+except ImportError:                   # Docker/HF Space: uvicorn Backend.main:app
+    from Backend import zone_measure
 from typing import Optional, List
 from pydantic import BaseModel
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
@@ -317,6 +322,80 @@ async def predict_3d(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Gemini Vision error: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# POST /measure-zones/ — Phase II: zone density MEASURED from the photos
+# (hair segmentation), instead of estimated by Gemini or looked up by stage.
+# Same form fields as /predict-3d/, so the app can switch with a URL change.
+# ═══════════════════════════════════════════════════════════════════
+
+def _stage_prior(cnn_stage: Optional[str]) -> Optional[dict]:
+    """Stage-table values for zones no photo covers. Accepts 'Stage 4 - ...' or '3'."""
+    if not cnn_stage:
+        return None
+    m = re.search(r"\d+", cnn_stage)
+    if not m:
+        return None
+    n = int(m.group())
+    idx = n - 1 if cnn_stage.strip().lower().startswith("stage") else n
+    if idx not in STAGE_ZONE_SCORES:
+        return None
+    prior = dict(STAGE_ZONE_SCORES[idx])
+    prior.setdefault("mid_scalp", prior.get("crown"))
+    return prior
+
+
+async def _read_rgb(upload: Optional[UploadFile]):
+    if upload is None:
+        return None
+    raw = await upload.read()
+    if not raw:
+        return None
+    try:
+        pil = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"'{upload.filename}' is not a readable image.")
+    return np.array(pil)
+
+
+@app.post("/measure-zones/")
+async def measure_zones_endpoint(
+    anterior: Optional[UploadFile] = File(None),
+    lateral: Optional[UploadFile] = File(None),
+    vertex: Optional[UploadFile] = File(None),
+    posterior: Optional[UploadFile] = File(None),
+    cnn_stage: Optional[str] = Form(None),
+    lateral_side: str = Form("left"),        # which side the lateral photo shows
+    vertex_front: str = Form("top"),         # where the forehead is in the top-down photo
+    include_overlays: bool = Form(True),
+):
+    images = {
+        "anterior": await _read_rgb(anterior),
+        "lateral": await _read_rgb(lateral),
+        "vertex": await _read_rgb(vertex),
+        "posterior": await _read_rgb(posterior),
+    }
+    images = {k: v for k, v in images.items() if v is not None}
+    if not images:
+        raise HTTPException(status_code=422, detail="At least one image must be provided.")
+
+    try:
+        result = zone_measure.measure_zones(
+            images,
+            prior=_stage_prior(cnn_stage),
+            lateral_side="right" if lateral_side.lower().startswith("r") else "left",
+            vertex_front="bottom" if vertex_front.lower().startswith("b") else "top",
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Zone measurement failed: {e}")
+
+    if not include_overlays:
+        result.pop("overlays", None)
+    if cnn_stage:
+        result["predicted_stage"] = cnn_stage
+    return result
 
 
 # Pydantic models for /analyse/full/ endpoint

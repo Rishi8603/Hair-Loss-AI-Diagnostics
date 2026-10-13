@@ -7,3 +7,5 @@ numpy
 google-generativeai
 python-dotenv
 groq
+opencv-python-headless
+mediapipe
