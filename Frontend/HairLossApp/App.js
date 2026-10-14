@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet, Text, View, Image, ActivityIndicator, Alert,
-  StatusBar, TouchableOpacity, ScrollView, Dimensions,
+  StatusBar, TouchableOpacity, ScrollView, Dimensions, Platform,
 } from 'react-native';
+import { File as FSFile } from 'expo-file-system';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import Head3DViewer from './Head3DViewer';
@@ -46,24 +47,21 @@ function CheckDot({ done }) {
 // crown, back) — see GuidedCapture.js for the live guided-camera flow. ────
 const CAPTURE_SLOTS = CAPTURE_STEPS;
 
-// ── Convert a local image URI (native) or blob URI (web) into a FormData
-// part. Newer React Native (0.86+) FormData/fetch is spec-compliant and only
-// accepts real Blob/File parts — the old `{ uri, name, type }` shorthand
-// throws "Unsupported FormDataPart implementation" — so fetch the URI into
-// a Blob on every platform instead.
-async function uriToFilePart(uri, fallbackName) {
-  let resp;
-  try {
-    resp = await fetch(uri);
-  } catch (e) {
-    throw new Error(`Could not read the selected photo (${e?.message || 'unknown error'}). It may have been removed from the device — please pick or capture it again.`);
+// ── Attach a photo to FormData. Expo's fetch rejects the legacy
+// `{ uri, name, type }` part and can't fetch() local file:// URIs (404), so on
+// native the photo goes in as an expo-file-system File (a Blob-compatible
+// object read natively); on web the URI is a blob: URL that fetch can read.
+async function appendPhoto(formData, field, uri, fallbackName) {
+  if (Platform.OS === 'web') {
+    const blob = await (await fetch(uri)).blob();
+    formData.append(field, blob, fallbackName);
+    return;
   }
-  if (!resp.ok) {
-    throw new Error(`Could not read the selected photo (HTTP ${resp.status}). It may have been removed from the device — please pick or capture it again.`);
+  const file = new FSFile(uri);
+  if (!file.exists) {
+    throw new Error('Could not read the selected photo — it may have been removed from the device. Please pick or capture it again.');
   }
-  const blob = await resp.blob();
-  const filename = uri.split('/').pop().split('?')[0] || fallbackName;
-  return { blob, filename };
+  formData.append(field, file);
 }
 
 // ── Fetch with timeout to prevent infinite mobile hangs ─────────
@@ -179,8 +177,7 @@ export default function App() {
     setLoading(true);
     try {
       const formData = new FormData();
-      const { blob, filename } = await uriToFilePart(stageImage, 'scalp.jpg');
-      formData.append('file', blob, filename);
+      await appendPhoto(formData, 'file', stageImage, 'scalp.jpg');
 
       const fetchOptions = { method: 'POST', body: formData };
       // Do NOT manually set Content-Type for multipart/form-data —
@@ -230,8 +227,7 @@ export default function App() {
 
       for (const { key } of CAPTURE_SLOTS) {
         if (images3d[key]) {
-          const { blob, filename } = await uriToFilePart(images3d[key], `${key}.jpg`);
-          formData.append(key, blob, filename);
+          await appendPhoto(formData, key, images3d[key], `${key}.jpg`);
         }
       }
 
