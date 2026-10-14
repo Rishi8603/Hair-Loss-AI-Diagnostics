@@ -1,0 +1,15 @@
+diff --git a/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt b/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
+index 999a22c..c3b8046 100644
+--- a/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
++++ b/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
+@@ -514,7 +514,9 @@ class ExpoCameraView(
+     imageCaptureUseCase = imageCaptureBuilder.build()
+ 
+     val videoCapture = createVideoCapture()
+-    imageAnalysisUseCase = createImageAnalyzer()
++    // Only bind the analyzer while barcode scanning is on (backport of expo-camera 58.0.6).
++    // A third full-resolution stream can starve the preview, leaving it black.
++    imageAnalysisUseCase = if (shouldScanBarcodes) createImageAnalyzer() else null
+ 
+     val useCases = UseCaseGroup.Builder().apply {
+       addUseCase(preview)

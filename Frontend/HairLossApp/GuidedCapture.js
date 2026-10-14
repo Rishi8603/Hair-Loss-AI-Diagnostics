@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  StyleSheet, Text, View, Image, TouchableOpacity, Dimensions, Alert,
+  StyleSheet, Text, View, Image, TouchableOpacity, Dimensions, Alert, AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -148,7 +148,10 @@ export default function GuidedCapture({ images = {}, startKey, onCapture, onClos
   const [cameraError, setCameraError] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [slowStart, setSlowStart] = useState(false);
+  const [cameraMounted, setCameraMounted] = useState(false);
+  const [cameraKey, setCameraKey] = useState(0);
   const cameraRef = useRef(null);
+  const restartTimer = useRef(null);
 
   const step = CAPTURE_STEPS[stepIndex];
 
@@ -156,12 +159,48 @@ export default function GuidedCapture({ images = {}, startKey, onCapture, onClos
     if (!permission) requestPermission();
   }, [permission]);
 
+  // Mount the camera only once the app is in the foreground and settled. Right
+  // after the permission dialog closes the activity is still resuming, and a
+  // preview bound at that moment can stay black on Android.
+  useEffect(() => {
+    if (!permission?.granted) return;
+    let timer;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setCameraMounted(true), 350);
+    };
+    if (AppState.currentState === 'active') arm();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') arm();
+    });
+    return () => {
+      clearTimeout(timer);
+      sub.remove();
+    };
+  }, [permission?.granted]);
+
+  useEffect(() => () => clearTimeout(restartTimer.current), []);
+
   // If the live preview hasn't come up after a few seconds, offer the phone's camera app.
   useEffect(() => {
-    if (cameraReady || !permission?.granted) return;
+    if (cameraReady || !cameraMounted) return;
     const t = setTimeout(() => setSlowStart(true), 5000);
     return () => clearTimeout(t);
-  }, [cameraReady, permission?.granted]);
+  }, [cameraReady, cameraMounted]);
+
+  // Unmount, wait for the old view to release the camera, then mount a fresh one.
+  // Mounting the new view straight away would race the old view's unbindAll().
+  const restartCamera = () => {
+    clearTimeout(restartTimer.current);
+    setCameraReady(false);
+    setCameraError(null);
+    setSlowStart(false);
+    setCameraMounted(false);
+    restartTimer.current = setTimeout(() => {
+      setCameraKey((k) => k + 1);
+      setCameraMounted(true);
+    }, 500);
+  };
 
   const takePhoto = async () => {
     if (!cameraRef.current || capturing || !cameraReady) return;
@@ -235,7 +274,15 @@ export default function GuidedCapture({ images = {}, startKey, onCapture, onClos
           <Text style={styles.closeBtnText}>✕</Text>
         </TouchableOpacity>
         <Text style={styles.topBarTitle}>{step.label}</Text>
-        <View style={{ width: 36 }} />
+        <TouchableOpacity
+          onPress={restartCamera}
+          style={styles.closeBtn}
+          activeOpacity={0.7}
+          disabled={!!previewUri}
+          accessibilityLabel="Restart camera"
+        >
+          <Text style={[styles.closeBtnText, previewUri && { opacity: 0.3 }]}>↻</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Step progress dots */}
@@ -258,13 +305,17 @@ export default function GuidedCapture({ images = {}, startKey, onCapture, onClos
         {/* Kept mounted for the whole wizard: on Android every CameraView unmount
             calls unbindAll() on the shared camera, which can unbind a freshly
             mounted preview and leave it black. */}
-        <CameraView
-          ref={cameraRef}
-          style={StyleSheet.absoluteFillObject}
-          facing="back"
-          onCameraReady={() => { setCameraReady(true); setCameraError(null); }}
-          onMountError={(e) => setCameraError(e?.message || 'Camera failed to start.')}
-        />
+        {cameraMounted && (
+          <CameraView
+            key={cameraKey}
+            ref={cameraRef}
+            style={StyleSheet.absoluteFillObject}
+            facing="back"
+            mode="picture"
+            onCameraReady={() => { setCameraReady(true); setCameraError(null); }}
+            onMountError={(e) => setCameraError(e?.message || 'Camera failed to start.')}
+          />
+        )}
         {previewUri ? (
           <Image source={{ uri: previewUri }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
         ) : (
@@ -280,6 +331,9 @@ export default function GuidedCapture({ images = {}, startKey, onCapture, onClos
                 <Text style={styles.cameraErrorText}>
                   {cameraError ? `⚠ ${cameraError}` : 'Camera preview is taking too long to start.'}
                 </Text>
+                <TouchableOpacity style={styles.cameraErrorBtn} onPress={restartCamera} activeOpacity={0.85}>
+                  <Text style={styles.cameraErrorBtnText}>Restart camera</Text>
+                </TouchableOpacity>
                 <TouchableOpacity style={styles.cameraErrorBtn} onPress={useSystemCamera} activeOpacity={0.85}>
                   <Text style={styles.cameraErrorBtnText}>Use phone camera instead</Text>
                 </TouchableOpacity>
@@ -345,7 +399,9 @@ const styles = StyleSheet.create({
   dotDone: { backgroundColor: '#0D9B72' },
   dotActive: { width: 20, backgroundColor: '#5B6AD0' },
 
-  cameraArea: { flex: 1, backgroundColor: '#000', overflow: 'hidden' },
+  // No overflow clipping here: on some Android phones clipping the parent hides
+  // the camera's SurfaceView, which shows as a black preview.
+  cameraArea: { flex: 1, backgroundColor: '#000' },
 
   guideLayer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
   guideOval: {
