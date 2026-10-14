@@ -606,6 +606,13 @@ function NativeHead3DViewer({ zones, onBack }) {
   const prevPinchDistRef = useRef(null);
   const [labels, setLabels] = useState([]);
   const labelRefs = useRef({});
+  const rafRef = useRef(null);
+  const unmountedRef = useRef(false);
+
+  useEffect(() => () => {
+    unmountedRef.current = true;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  }, []);
 
   // ── Fixed PanResponder with proper gesture capture ──
   const panResponder = useRef(
@@ -666,6 +673,7 @@ function NativeHead3DViewer({ zones, onBack }) {
     let labelData = [];
 
     const res = await loadMultiMeshModel(zones);
+    if (unmountedRef.current) return;
     if (res) {
       meshGroup = res.model;
       labelData = res.labels;
@@ -674,7 +682,8 @@ function NativeHead3DViewer({ zones, onBack }) {
     }
 
     const render = () => {
-      requestAnimationFrame(render);
+      if (unmountedRef.current) return;
+      rafRef.current = requestAnimationFrame(render);
       if (meshGroup) {
         meshGroup.rotation.y = rotationRef.current.y;
         meshGroup.rotation.x = rotationRef.current.x;

@@ -2,18 +2,23 @@ import React, { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet, Text, View, Image, ActivityIndicator, Alert,
-  StatusBar, TouchableOpacity, ScrollView, Dimensions, Platform,
+  StatusBar, TouchableOpacity, ScrollView, Dimensions,
 } from 'react-native';
-import { File as FSFile } from 'expo-file-system';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import Head3DViewer from './Head3DViewer';
 import LifestyleForm from './LifestyleForm';
 import FullAnalysisResult from './FullAnalysisResult';
 import GuidedCapture, { CAPTURE_STEPS } from './GuidedCapture';
+import ProgressTracker from './ProgressTracker';
+import { API_URL_BASE, fetchWithTimeout, predictStage, measureZones } from './api';
+import { loadLog, localDayKey, dayNumber, daysBetween, formatDayKey } from './progressStore';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const API_URL_BASE = 'https://rishi8603-hair-loss-api.hf.space';
+
+const APP_STATE_KEYS = [
+  '@lifestyleData', '@stageImage', '@stageResult', '@images3d', '@zones3d', '@result3d', '@fullAnalysis',
+];
 
 // ── Clean Icon Badge Component ──────────────────────────────────
 function IconBadge({ char, bg, color, size = 40 }) {
@@ -47,33 +52,6 @@ function CheckDot({ done }) {
 // crown, back) — see GuidedCapture.js for the live guided-camera flow. ────
 const CAPTURE_SLOTS = CAPTURE_STEPS;
 
-// ── Attach a photo to FormData. Expo's fetch rejects the legacy
-// `{ uri, name, type }` part and can't fetch() local file:// URIs (404), so on
-// native the photo goes in as an expo-file-system File (a Blob-compatible
-// object read natively); on web the URI is a blob: URL that fetch can read.
-async function appendPhoto(formData, field, uri, fallbackName) {
-  if (Platform.OS === 'web') {
-    const blob = await (await fetch(uri)).blob();
-    formData.append(field, blob, fallbackName);
-    return;
-  }
-  const file = new FSFile(uri);
-  if (!file.exists) {
-    throw new Error('Could not read the selected photo — it may have been removed from the device. Please pick or capture it again.');
-  }
-  formData.append(field, file);
-}
-
-// ── Fetch with timeout to prevent infinite mobile hangs ─────────
-function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
-  return Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out. Check your network connection.')), timeoutMs),
-    ),
-  ]);
-}
-
 export default function App() {
   // ── Screen routing ──────────────────────────────────────────
   const [screen, setScreen] = useState('home');
@@ -96,6 +74,15 @@ export default function App() {
 
   // ── Deep Analysis (Groq) ────────────────────────────────────
   const [fullAnalysis, setFullAnalysis] = useState(null);
+
+  // ── 3D viewer target ({ zones, backTo }) and progress summary ──
+  const [viewer, setViewer] = useState(null);
+  const [progressLog, setProgressLog] = useState([]);
+
+  useEffect(() => {
+    if (screen !== 'home') return;
+    loadLog().then(setProgressLog).catch((e) => console.error('Failed to load progress log', e));
+  }, [screen]);
 
   // ── Persistence ─────────────────────────────────────────────
   const [isReady, setIsReady] = useState(false);
@@ -176,21 +163,7 @@ export default function App() {
     if (!stageImage) return;
     setLoading(true);
     try {
-      const formData = new FormData();
-      await appendPhoto(formData, 'file', stageImage, 'scalp.jpg');
-
-      const fetchOptions = { method: 'POST', body: formData };
-      // Do NOT manually set Content-Type for multipart/form-data —
-      // React Native's fetch auto-generates it with the correct boundary.
-
-      const response = await fetchWithTimeout(`${API_URL_BASE}/predict/`, fetchOptions, 60000);
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        throw new Error('Server did not return a valid response. It may still be starting up — please retry in a few seconds.');
-      }
-      const json = await response.json();
-      if (!response.ok) throw new Error(`${json.detail || 'Prediction failed'} (HTTP ${response.status} on /predict/)`);
-      setStageResult(json);
+      setStageResult(await predictStage(stageImage));
     } catch (error) {
       console.error(error);
       Alert.alert('Error', error.message || 'Failed to predict.');
@@ -217,31 +190,8 @@ export default function App() {
     }
     setLoading(true);
     try {
-      const formData = new FormData();
-
-      // Inject CNN ground truth so unmeasured zones fall back to it, not 0.5
-      if (stageResult && stageResult.predicted_stage) {
-        formData.append('cnn_stage', stageResult.predicted_stage);
-      }
-      formData.append('include_overlays', 'false');
-
-      for (const { key } of CAPTURE_SLOTS) {
-        if (images3d[key]) {
-          await appendPhoto(formData, key, images3d[key], `${key}.jpg`);
-        }
-      }
-
-      const fetchOptions = { method: 'POST', body: formData };
-      // Do NOT manually set Content-Type for multipart/form-data —
-      // React Native's fetch auto-generates it with the correct boundary.
-
-      const response = await fetchWithTimeout(`${API_URL_BASE}/measure-zones/`, fetchOptions, 60000);
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        throw new Error('The /measure-zones/ endpoint is not available.');
-      }
-      const json = await response.json();
-      if (!response.ok) throw new Error(`${json.detail || 'Analysis failed'} (HTTP ${response.status} on /measure-zones/)`);
+      // CNN stage fills zones no photo covers, instead of a flat 0.5
+      const json = await measureZones(images3d, stageResult?.predicted_stage);
       setResult3d(json);
       setZones3d(json.zones || null);
     } catch (error) {
@@ -264,10 +214,15 @@ export default function App() {
           stage_index: stageResult.stage_index,
           predicted_stage: stageResult.predicted_stage,
           confidence: stageResult.confidence,
-          zones: stageResult.zones || {},
+          // photo-measured zones (when available) override the stage-table estimate
+          zones: { ...(stageResult.zones || {}), ...(zones3d || {}) },
           metadata: lifestyleData,
         }),
-      }, 45000);
+      }, 60000);
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Server did not return a valid response (HTTP ${response.status}). Please retry in a few seconds.`);
+      }
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Analysis failed');
       setFullAnalysis(data.analysis);
@@ -295,7 +250,13 @@ export default function App() {
     setZones3d(null);
     setResult3d(null);
     setFullAnalysis(null);
-    await AsyncStorage.clear();
+    // Progress history is deliberately kept; it has its own delete option.
+    await AsyncStorage.multiRemove(APP_STATE_KEYS);
+  };
+
+  const openViewer = (zones, backTo) => {
+    setViewer({ zones, backTo });
+    setScreen('viewer');
   };
 
   // ═══════════════════════════════════════════════════════════════
@@ -325,8 +286,19 @@ export default function App() {
   }
 
   // ── 3D Head Viewer ──────────────────────────────────────────
-  if (screen === 'viewer' && zones3d) {
-    return <Head3DViewer zones={zones3d} onBack={() => setScreen('3d')} />;
+  if (screen === 'viewer' && viewer) {
+    return <Head3DViewer zones={viewer.zones} onBack={() => setScreen(viewer.backTo)} />;
+  }
+
+  // ── Progress Tracker ────────────────────────────────────────
+  if (screen === 'progress') {
+    return (
+      <ProgressTracker
+        cnnStage={stageResult?.predicted_stage}
+        onBack={() => setScreen('home')}
+        onOpen3D={(zones) => openViewer(zones, 'progress')}
+      />
+    );
   }
 
   // ── Full Analysis Report ────────────────────────────────────
@@ -337,7 +309,7 @@ export default function App() {
         predictedStage={stageResult?.predicted_stage || ''}
         confidence={stageResult?.confidence || ''}
         onBack={() => setScreen('home')}
-        onOpen3D={zones3d ? () => setScreen('viewer') : null}
+        onOpen3D={zones3d ? () => openViewer(zones3d, 'fullResult') : null}
       />
     );
   }
@@ -488,7 +460,7 @@ export default function App() {
                 <Text style={styles.headerBadgeText}>3D VISUALIZATION</Text>
               </View>
               <Text style={styles.title}>Scalp Heatmap</Text>
-              <Text style={styles.subtitle}>Multi-angle zone mapping via AI Vision</Text>
+              <Text style={styles.subtitle}>Hair density measured zone by zone from your photos</Text>
             </View>
 
             {/* Caution: no stage prediction yet */}
@@ -499,7 +471,7 @@ export default function App() {
                 activeOpacity={0.8}
               >
                 <Text style={styles.cautionText}>
-                  ⚠ For best accuracy, complete Stage Prediction first so AI Vision can use your CNN result as ground truth.
+                  ⚠ Complete Stage Prediction first. Zones you don't photograph are then estimated from your stage instead of a neutral default.
                 </Text>
                 <Text style={styles.cautionLink}>Go to Stage Prediction →</Text>
               </TouchableOpacity>
@@ -570,8 +542,8 @@ export default function App() {
             {loading && (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#5B6AD0" />
-                <Text style={styles.loadingText}>AI Vision is analysing your scalp...</Text>
-                <Text style={styles.loadingSubtext}>This may take 10–20 seconds</Text>
+                <Text style={styles.loadingText}>Measuring hair density in each zone...</Text>
+                <Text style={styles.loadingSubtext}>Up to a minute if the server is waking up</Text>
               </View>
             )}
 
@@ -579,29 +551,43 @@ export default function App() {
             {result3d && !loading && (
               <View style={styles.resultCard}>
                 <View style={styles.resultHeader}>
-                  <Text style={styles.resultLabel}>ZONE MAPPING</Text>
+                  <Text style={styles.resultLabel}>ZONE DENSITY</Text>
                   <View style={styles.geminiTag}>
-                    <Text style={styles.geminiTagText}>✦ AI Vision</Text>
+                    <Text style={styles.geminiTagText}>
+                      ✦ {(result3d.measured_zones || []).length}/6 zones measured
+                    </Text>
                   </View>
                 </View>
-                {/* Result stage removed so CNN remains the source of truth */}
 
-                {result3d.summary ? (
-                  <Text style={styles.resultSummary}>{result3d.summary}</Text>
-                ) : null}
-
-                {/* Zone chips */}
                 {zones3d && (
                   <View style={styles.zoneGrid}>
-                    {Object.entries(zones3d).map(([zone, score]) => (
-                      <View key={zone} style={styles.zoneChip}>
-                        <View style={[styles.zoneChipDot, { backgroundColor: scoreToColor(score) }]} />
-                        <Text style={styles.zoneChipLabel}>{zone.replace('_', ' ')}</Text>
-                        <Text style={styles.zoneChipScore}>{(score * 100).toFixed(0)}%</Text>
-                      </View>
-                    ))}
+                    {Object.entries(zones3d).map(([zone, score]) => {
+                      const measured = result3d.zone_source?.[zone] === 'measured';
+                      return (
+                        <View key={zone} style={[styles.zoneChip, !measured && styles.zoneChipEstimated]}>
+                          <View style={[styles.zoneChipDot, { backgroundColor: scoreToColor(score) }]} />
+                          <Text style={styles.zoneChipLabel}>{zone.replace('_', ' ')}</Text>
+                          <Text style={styles.zoneChipScore}>{(score * 100).toFixed(0)}%</Text>
+                          {!measured && <Text style={styles.zoneChipEst}>est.</Text>}
+                        </View>
+                      );
+                    })}
                   </View>
                 )}
+                <Text style={styles.zoneLegendNote}>
+                  % = hair density. "est." zones weren't visible in your photos and are estimated from your stage.
+                </Text>
+
+                {(() => {
+                  const warnings = [...new Set(Object.values(result3d.view_info || {}).flatMap((v) => v.warnings || []))];
+                  return warnings.length > 0 ? (
+                    <View style={styles.warningBox}>
+                      {warnings.map((w) => (
+                        <Text key={w} style={styles.warningText}>⚠ {w}</Text>
+                      ))}
+                    </View>
+                  ) : null;
+                })()}
               </View>
             )}
 
@@ -609,7 +595,7 @@ export default function App() {
             {zones3d && !loading && (
               <TouchableOpacity
                 style={styles.view3DButton}
-                onPress={() => setScreen('viewer')}
+                onPress={() => openViewer(zones3d, '3d')}
                 activeOpacity={0.85}
               >
                 <Text style={styles.view3DButtonText}>View 3D Heatmap</Text>
@@ -713,6 +699,40 @@ export default function App() {
               )}
             </TouchableOpacity>
           </View>
+
+          {/* ── Progress Tracker Card ── */}
+          {(() => {
+            const latest = progressLog[progressLog.length - 1];
+            const today = localDayKey();
+            const doneToday = latest && latest.dayKey === today;
+            const title = !latest
+              ? 'Start daily monitoring'
+              : doneToday
+                ? `Day ${dayNumber(progressLog, latest)} check-in done`
+                : `Day ${daysBetween(progressLog[0].dayKey, today) + 1} check-in due`;
+            const sub = !latest
+              ? 'Photograph your scalp each day and track how much scalp area is showing'
+              : doneToday
+                ? progressLog.length === 1
+                  ? 'Baseline saved. Come back tomorrow for your first comparison'
+                  : 'Tap to see your progress report'
+                : `Last check-in ${formatDayKey(latest.dayKey)}. Tap to continue`;
+            return (
+              <TouchableOpacity
+                style={[styles.progressCard, doneToday && styles.progressCardDone]}
+                onPress={() => setScreen('progress')}
+                activeOpacity={0.85}
+              >
+                <IconBadge char="↗" bg={doneToday ? '#E8FFF5' : '#EEF0FF'} color={doneToday ? '#0D9B72' : '#5B6AD0'} size={40} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.progressCardEyebrow}>PROGRESS TRACKER</Text>
+                  <Text style={styles.progressCardTitle}>{title}</Text>
+                  <Text style={styles.progressCardSub}>{sub}</Text>
+                </View>
+                <Text style={styles.improveCardArrow}>›</Text>
+              </TouchableOpacity>
+            );
+          })()}
 
           {/* ── Deep Analysis Card ── */}
           <TouchableOpacity
@@ -986,6 +1006,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+
+  // ── Progress Tracker Card ──
+  progressCard: {
+    width: '100%', flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#FFFFFF', borderRadius: 18, borderWidth: 1, borderColor: '#D0D5F6',
+    padding: 16, marginBottom: 16,
+    shadowColor: '#5B6AD0', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3,
+  },
+  progressCardDone: { borderColor: '#A0E8CC', backgroundColor: '#F8FFFC' },
+  progressCardEyebrow: { color: '#5B6AD0', fontSize: 10, fontWeight: '800', letterSpacing: 1.4 },
+  progressCardTitle: { color: '#1A1D2E', fontSize: 15, fontWeight: '800', marginTop: 2 },
+  progressCardSub: { color: '#6B7291', fontSize: 12, marginTop: 2, lineHeight: 17 },
 
   // ── Deep Analysis Card ──
   deepAnalysisCard: {
@@ -1311,6 +1343,11 @@ const styles = StyleSheet.create({
   zoneChipDot: { width: 8, height: 8, borderRadius: 4 },
   zoneChipLabel: { color: '#5A5F78', fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
   zoneChipScore: { color: '#1A1D2E', fontSize: 11, fontWeight: '800' },
+  zoneChipEstimated: { borderStyle: 'dashed', backgroundColor: '#FAFAFD' },
+  zoneChipEst: { color: '#9CA3BE', fontSize: 9, fontWeight: '700' },
+  zoneLegendNote: { color: '#8B91A8', fontSize: 11, marginTop: 12, lineHeight: 16, fontStyle: 'italic' },
+  warningBox: { backgroundColor: '#FFF8ED', borderRadius: 10, padding: 10, marginTop: 12, gap: 4 },
+  warningText: { color: '#8B6914', fontSize: 12, fontWeight: '600' },
 
   // ── 3D Button ──
   view3DButton: {
