@@ -6,13 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMotionUsageDescription": "Used to show a level indicator while aligning scalp photos."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -30,13 +28,28 @@
       "assets/**"
     ],
     "plugins": [
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to capture scalp photos for analysis."
+        }
+      ],
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#ffffff",
+          "resizeMode": "contain",
+          "image": "./assets/splash-icon.png"
+        }
+      ]
     ],
     "extra": {
       "eas": {
-        "projectId": "0057d327-3f2c-4024-b200-ba1f0f300474"
+        "projectId": "24f11820-d06d-4c96-9477-d6040a07084b"
       }
     },
-    "owner": "rishi8603"
+    "owner": "rishi5084"
   }
 }

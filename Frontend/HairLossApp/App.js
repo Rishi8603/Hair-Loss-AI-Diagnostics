@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet, Text, View, Image, ActivityIndicator, Alert,
-  StatusBar, TouchableOpacity, ScrollView, Dimensions, Platform,
+  StatusBar, TouchableOpacity, ScrollView, Dimensions,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import Head3DViewer from './Head3DViewer';
 import LifestyleForm from './LifestyleForm';
 import FullAnalysisResult from './FullAnalysisResult';
+import GuidedCapture, { CAPTURE_STEPS } from './GuidedCapture';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const API_URL_BASE = 'https://rishi8603-hair-loss-api.hf.space';
@@ -41,13 +42,29 @@ function CheckDot({ done }) {
   );
 }
 
-// ── The 4 capture slots for 3D analysis ─────────────────────────
-const CAPTURE_SLOTS = [
-  { key: 'anterior', label: 'Front View', guideImg: require('./assets/guide_anterior.png'), hint: 'Look straight. Ensure hairline and forehead are clearly visible. Pull hair back if needed.' },
-  { key: 'lateral', label: 'Side Profile', guideImg: require('./assets/guide_lateral.png'), hint: 'Turn head 90°. Show the temple line clearly. Keep camera at eye level.' },
-  { key: 'vertex', label: 'Top / Crown', guideImg: require('./assets/guide_vertex.png'), hint: 'Point camera straight down at the top of your head to show the crown area.' },
-  { key: 'posterior', label: 'Back View', guideImg: require('./assets/guide_posterior.png'), hint: 'Show the back of your head. Have someone help or use a mirror.' },
-];
+// ── The 5 capture slots for 3D analysis (front, right temple, left temple,
+// crown, back) — see GuidedCapture.js for the live guided-camera flow. ────
+const CAPTURE_SLOTS = CAPTURE_STEPS;
+
+// ── Convert a local image URI (native) or blob URI (web) into a FormData
+// part. Newer React Native (0.86+) FormData/fetch is spec-compliant and only
+// accepts real Blob/File parts — the old `{ uri, name, type }` shorthand
+// throws "Unsupported FormDataPart implementation" — so fetch the URI into
+// a Blob on every platform instead.
+async function uriToFilePart(uri, fallbackName) {
+  let resp;
+  try {
+    resp = await fetch(uri);
+  } catch (e) {
+    throw new Error(`Could not read the selected photo (${e?.message || 'unknown error'}). It may have been removed from the device — please pick or capture it again.`);
+  }
+  if (!resp.ok) {
+    throw new Error(`Could not read the selected photo (HTTP ${resp.status}). It may have been removed from the device — please pick or capture it again.`);
+  }
+  const blob = await resp.blob();
+  const filename = uri.split('/').pop().split('?')[0] || fallbackName;
+  return { blob, filename };
+}
 
 // ── Fetch with timeout to prevent infinite mobile hangs ─────────
 function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
@@ -73,10 +90,11 @@ export default function App() {
   const [stageImage, setStageImage] = useState(null);
   const [stageResult, setStageResult] = useState(null);
 
-  // ── 3D Visualization (Gemini) ───────────────────────────────
+  // ── 3D Visualization (measured zones) ────────────────────────
   const [images3d, setImages3d] = useState({});
   const [zones3d, setZones3d] = useState(null);
   const [result3d, setResult3d] = useState(null);
+  const [captureStepKey, setCaptureStepKey] = useState(null); // active GuidedCapture step, or null
 
   // ── Deep Analysis (Groq) ────────────────────────────────────
   const [fullAnalysis, setFullAnalysis] = useState(null);
@@ -161,24 +179,20 @@ export default function App() {
     setLoading(true);
     try {
       const formData = new FormData();
-      if (Platform.OS === 'web') {
-        const resp = await fetch(stageImage);
-        const blob = await resp.blob();
-        formData.append('file', new File([blob], 'scalp.jpg', { type: blob.type || 'image/jpeg' }));
-      } else {
-        const filename = stageImage.split('/').pop();
-        const match = /\.(\w+)$/.exec(filename);
-        const type = match ? `image/${match[1]}` : 'image/jpeg';
-        formData.append('file', { uri: stageImage, name: filename, type });
-      }
+      const { blob, filename } = await uriToFilePart(stageImage, 'scalp.jpg');
+      formData.append('file', blob, filename);
 
       const fetchOptions = { method: 'POST', body: formData };
       // Do NOT manually set Content-Type for multipart/form-data —
       // React Native's fetch auto-generates it with the correct boundary.
 
-      const response = await fetchWithTimeout(`${API_URL_BASE}/predict/`, fetchOptions, 30000);
+      const response = await fetchWithTimeout(`${API_URL_BASE}/predict/`, fetchOptions, 60000);
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error('Server did not return a valid response. It may still be starting up — please retry in a few seconds.');
+      }
       const json = await response.json();
-      if (!response.ok) throw new Error(json.detail || 'Prediction failed');
+      if (!response.ok) throw new Error(`${json.detail || 'Prediction failed'} (HTTP ${response.status} on /predict/)`);
       setStageResult(json);
     } catch (error) {
       console.error(error);
@@ -188,21 +202,17 @@ export default function App() {
     }
   };
 
-  // ── Pick 3D image for a specific slot ───────────────────────
-  const pick3DImage = async (slotKey) => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.85,
-    });
-    if (!res.canceled) {
-      setImages3d((prev) => ({ ...prev, [slotKey]: res.assets[0].uri }));
-      setResult3d(null);
-      setZones3d(null);
-    }
+  // ── Open the guided camera wizard for a specific slot ───────
+  const openGuidedCapture = (slotKey) => setCaptureStepKey(slotKey);
+
+  // ── Called by GuidedCapture the moment a photo is confirmed ─
+  const handleGuidedCapture = (slotKey, uri) => {
+    setImages3d((prev) => ({ ...prev, [slotKey]: uri }));
+    setResult3d(null);
+    setZones3d(null);
   };
 
-  // ── Upload 4 images to /predict-3d/ (Gemini) ───────────────
+  // ── Upload up to 5 images to /measure-zones/ (segmentation-measured) ─
   const run3DVisualization = async () => {
     if (filledCount3d === 0) {
       Alert.alert('No images', 'Please add at least one scalp angle.');
@@ -212,24 +222,16 @@ export default function App() {
     try {
       const formData = new FormData();
 
-      // Inject CNN ground truth if available to prevent AI hallucination
+      // Inject CNN ground truth so unmeasured zones fall back to it, not 0.5
       if (stageResult && stageResult.predicted_stage) {
         formData.append('cnn_stage', stageResult.predicted_stage);
       }
+      formData.append('include_overlays', 'false');
 
       for (const { key } of CAPTURE_SLOTS) {
         if (images3d[key]) {
-          const uri = images3d[key];
-          if (Platform.OS === 'web') {
-            const resp = await fetch(uri);
-            const blob = await resp.blob();
-            formData.append(key, new File([blob], `${key}.jpg`, { type: blob.type || 'image/jpeg' }));
-          } else {
-            const filename = uri.split('/').pop();
-            const match = /\.(\w+)$/.exec(filename);
-            const type = match ? `image/${match[1]}` : 'image/jpeg';
-            formData.append(key, { uri, name: filename, type });
-          }
+          const { blob, filename } = await uriToFilePart(images3d[key], `${key}.jpg`);
+          formData.append(key, blob, filename);
         }
       }
 
@@ -237,13 +239,13 @@ export default function App() {
       // Do NOT manually set Content-Type for multipart/form-data —
       // React Native's fetch auto-generates it with the correct boundary.
 
-      const response = await fetchWithTimeout(`${API_URL_BASE}/predict-3d/`, fetchOptions, 60000);
+      const response = await fetchWithTimeout(`${API_URL_BASE}/measure-zones/`, fetchOptions, 60000);
       const contentType = response.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
-        throw new Error('The /predict-3d/ endpoint is not available.');
+        throw new Error('The /measure-zones/ endpoint is not available.');
       }
       const json = await response.json();
-      if (!response.ok) throw new Error(json.detail || 'Analysis failed');
+      if (!response.ok) throw new Error(`${json.detail || 'Analysis failed'} (HTTP ${response.status} on /measure-zones/)`);
       setResult3d(json);
       setZones3d(json.zones || null);
     } catch (error) {
@@ -309,6 +311,20 @@ export default function App() {
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#5B6AD0" />
       </View>
+    );
+  }
+
+  // ── Guided camera wizard (takes over the full screen) ───────
+  if (captureStepKey) {
+    return (
+      <SafeAreaProvider>
+        <GuidedCapture
+          images={images3d}
+          startKey={captureStepKey}
+          onCapture={handleGuidedCapture}
+          onClose={() => setCaptureStepKey(null)}
+        />
+      </SafeAreaProvider>
     );
   }
 
@@ -495,13 +511,13 @@ export default function App() {
 
             {/* Instruction */}
             <View style={styles.instructionCard}>
-              <Text style={styles.instructionTitle}>Capture 4 Angles</Text>
+              <Text style={styles.instructionTitle}>Capture 5 Angles</Text>
               <Text style={styles.instructionBody}>
-                Select one photo per angle for the most accurate 3D heatmap. All 4 gives the best result — but even 1 works.
+                Each tile opens a guided camera that walks you through correct alignment for that angle. All 5 gives the most accurate heatmap — but even 1 works.
               </Text>
             </View>
 
-            {/* 4-slot grid */}
+            {/* 5-slot grid */}
             <View style={styles.slotGrid}>
               {CAPTURE_SLOTS.map(({ key, label, guideImg, hint }) => {
                 const uri = images3d[key];
@@ -509,7 +525,7 @@ export default function App() {
                   <TouchableOpacity
                     key={key}
                     style={[styles.slot, uri && styles.slotFilled]}
-                    onPress={() => pick3DImage(key)}
+                    onPress={() => openGuidedCapture(key)}
                     activeOpacity={0.75}
                   >
                     {uri ? (
@@ -540,7 +556,7 @@ export default function App() {
               {CAPTURE_SLOTS.map(({ key }) => (
                 <View key={key} style={[styles.progressDot, images3d[key] && styles.progressDotFilled]} />
               ))}
-              <Text style={styles.progressText}>{filledCount3d}/4 angles captured</Text>
+              <Text style={styles.progressText}>{filledCount3d}/5 angles captured</Text>
             </View>
 
             {/* Render button */}
@@ -551,7 +567,7 @@ export default function App() {
               activeOpacity={0.85}
             >
               <Text style={styles.analyzeButtonText}>
-                {filledCount3d === 4 ? 'Render 3D Heatmap' : `Analyse (${filledCount3d} angle${filledCount3d !== 1 ? 's' : ''})`}
+                {filledCount3d === 5 ? 'Render 3D Heatmap' : `Analyse (${filledCount3d} angle${filledCount3d !== 1 ? 's' : ''})`}
               </Text>
             </TouchableOpacity>
 
@@ -688,7 +704,7 @@ export default function App() {
               <IconBadge char="3D" bg="#E8FBF5" color="#0D9B72" size={44} />
               <Text style={styles.featureCardTitle}>3D Scalp{'\n'}Visualizer</Text>
               <Text style={styles.featureCardDesc}>
-                {zones3d ? 'Heatmap ready!' : 'Upload 4 angles\nAI Vision'}
+                {zones3d ? 'Heatmap ready!' : 'Guided camera\n5 angles'}
               </Text>
               {zones3d ? (
                 <View style={styles.featureCardCompleteBadge}>

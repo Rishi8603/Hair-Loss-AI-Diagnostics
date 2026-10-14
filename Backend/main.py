@@ -362,17 +362,21 @@ async def _read_rgb(upload: Optional[UploadFile]):
 @app.post("/measure-zones/")
 async def measure_zones_endpoint(
     anterior: Optional[UploadFile] = File(None),
-    lateral: Optional[UploadFile] = File(None),
+    lateral: Optional[UploadFile] = File(None),          # legacy: one temple, side given by lateral_side
+    lateral_left: Optional[UploadFile] = File(None),      # right/left temple shot separately
+    lateral_right: Optional[UploadFile] = File(None),
     vertex: Optional[UploadFile] = File(None),
     posterior: Optional[UploadFile] = File(None),
     cnn_stage: Optional[str] = Form(None),
-    lateral_side: str = Form("left"),        # which side the lateral photo shows
+    lateral_side: str = Form("left"),        # which side the legacy `lateral` photo shows
     vertex_front: str = Form("top"),         # where the forehead is in the top-down photo
     include_overlays: bool = Form(True),
 ):
     images = {
         "anterior": await _read_rgb(anterior),
         "lateral": await _read_rgb(lateral),
+        "lateral_left": await _read_rgb(lateral_left),
+        "lateral_right": await _read_rgb(lateral_right),
         "vertex": await _read_rgb(vertex),
         "posterior": await _read_rgb(posterior),
     }

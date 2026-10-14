@@ -267,16 +267,23 @@ def to_base64_png(img_rgb: np.ndarray) -> str:
 def measure_zones(images: dict, prior: dict | None = None,
                   lateral_side: str = "left", vertex_front: str = "top") -> dict:
     """
-    images: {"anterior"|"lateral"|"vertex"|"posterior": RGB np.ndarray}
+    images: {"anterior"|"lateral"|"lateral_left"|"lateral_right"|"vertex"|"posterior": RGB np.ndarray}
     prior:  fallback values for zones no photo covers (e.g. from the CNN stage)
+
+    "lateral_left"/"lateral_right" are two separate temple photos, each scored
+    straight into temporal_left/temporal_right. The plain "lateral" key is kept
+    for backward compatibility (a single temple photo, side picked by lateral_side).
     """
     acc = {k: [] for k in ZONE_KEYS}            # (density, pixels) samples per zone
     overlays, view_info = {}, {}
 
     for view, img in images.items():
-        if img is None or view not in ZONE_LAYOUT:
+        if img is None:
             continue
-        vals, overlay, info = measure_view(img, view, vertex_front=vertex_front)
+        layout_view = "lateral" if view in ("lateral", "lateral_left", "lateral_right") else view
+        if layout_view not in ZONE_LAYOUT:
+            continue
+        vals, overlay, info = measure_view(img, layout_view, vertex_front=vertex_front)
         overlays[view] = to_base64_png(overlay)
         view_info[view] = info
         for name, v in vals.items():
@@ -284,7 +291,12 @@ def measure_zones(images: dict, prior: dict | None = None,
                 continue
             target = name
             if name == "temporal_side":
-                target = "temporal_left" if lateral_side == "left" else "temporal_right"
+                if view == "lateral_right":
+                    target = "temporal_right"
+                elif view == "lateral_left":
+                    target = "temporal_left"
+                else:
+                    target = "temporal_left" if lateral_side == "left" else "temporal_right"
             acc[target].append((v["density"], v["pixels"]))
 
     zones, source = {}, {}
