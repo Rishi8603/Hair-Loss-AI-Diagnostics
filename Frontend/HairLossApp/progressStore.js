@@ -46,6 +46,21 @@ export function dayNumber(log, entry) {
   return log.length ? daysBetween(log[0].dayKey, entry.dayKey) + 1 : 1;
 }
 
+// Consecutive days with a check-in, ending today (or yesterday, so a streak
+// isn't shown as broken before today's check-in is done).
+export function currentStreak(log, today = localDayKey()) {
+  if (!log.length) return 0;
+  const days = [...new Set(log.map((e) => e.dayKey))].sort();
+  let i = days.length - 1;
+  if (daysBetween(days[i], today) > 1) return 0;
+  let streak = 1;
+  while (i > 0 && daysBetween(days[i - 1], days[i]) === 1) {
+    streak += 1;
+    i -= 1;
+  }
+  return streak;
+}
+
 // ── Storage ────────────────────────────────────────────────────────
 export async function loadLog() {
   const raw = await AsyncStorage.getItem(STORAGE_KEY);

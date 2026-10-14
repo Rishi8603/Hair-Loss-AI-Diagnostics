@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet, Text, View, Image, ActivityIndicator, Alert,
-  StatusBar, TouchableOpacity, ScrollView, Dimensions,
+  StatusBar, TouchableOpacity, ScrollView, Dimensions, Platform,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -12,41 +12,16 @@ import FullAnalysisResult from './FullAnalysisResult';
 import GuidedCapture, { CAPTURE_STEPS } from './GuidedCapture';
 import ProgressTracker from './ProgressTracker';
 import { API_URL_BASE, fetchWithTimeout, predictStage, measureZones } from './api';
-import { loadLog, localDayKey, dayNumber, daysBetween, formatDayKey } from './progressStore';
+import {
+  loadLog, localDayKey, dayNumber, daysBetween, formatDayKey, currentStreak, ZONE_LABELS,
+} from './progressStore';
+import { Tap, FadeIn, GrowBar } from './ui';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
 const APP_STATE_KEYS = [
   '@lifestyleData', '@stageImage', '@stageResult', '@images3d', '@zones3d', '@result3d', '@fullAnalysis',
 ];
-
-// ── Clean Icon Badge Component ──────────────────────────────────
-function IconBadge({ char, bg, color, size = 40 }) {
-  return (
-    <View style={{
-      width: size, height: size, borderRadius: size / 2,
-      backgroundColor: bg || '#EEF0FF',
-      justifyContent: 'center', alignItems: 'center',
-    }}>
-      <Text style={{
-        color: color || '#5B6AD0', fontSize: size * 0.42,
-        fontWeight: '800', letterSpacing: -0.5,
-      }}>{char}</Text>
-    </View>
-  );
-}
-
-function CheckDot({ done }) {
-  return (
-    <View style={{
-      width: 20, height: 20, borderRadius: 10,
-      backgroundColor: done ? '#0D9B72' : '#E0E4F0',
-      justifyContent: 'center', alignItems: 'center',
-    }}>
-      {done && <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '800' }}>✓</Text>}
-    </View>
-  );
-}
 
 // ── The 5 capture slots for 3D analysis (front, right temple, left temple,
 // crown, back) — see GuidedCapture.js for the live guided-camera flow. ────
@@ -254,6 +229,18 @@ export default function App() {
     await AsyncStorage.multiRemove(APP_STATE_KEYS);
   };
 
+  const confirmReset = () => {
+    const message = 'This clears your survey, stage result, scan photos and report. Your daily progress history is kept.';
+    if (Platform.OS === 'web') {
+      if (window.confirm(message)) handleClearAllData();
+      return;
+    }
+    Alert.alert('Start over?', message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reset', style: 'destructive', onPress: handleClearAllData },
+    ]);
+  };
+
   const openViewer = (zones, backTo) => {
     setViewer({ zones, backTo });
     setScreen('viewer');
@@ -400,6 +387,27 @@ export default function App() {
                 </View>
                 <Text style={styles.resultStage}>{stageResult.predicted_stage}</Text>
 
+                {/* Position on the 7-stage Norwood scale */}
+                {Number.isInteger(stageResult.stage_index) && (
+                  <View style={styles.norwood}>
+                    {[0, 1, 2, 3, 4, 5, 6].map((i) => {
+                      const active = i === stageResult.stage_index;
+                      return (
+                        <View key={i} style={styles.norwoodCell}>
+                          <View
+                            style={[
+                              styles.norwoodBar,
+                              { backgroundColor: NORWOOD_COLORS[i], opacity: active ? 1 : 0.28 },
+                              active && styles.norwoodBarActive,
+                            ]}
+                          />
+                          <Text style={[styles.norwoodNum, active && styles.norwoodNumActive]}>{i + 1}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+
                 {/* Confidence bar */}
                 <View style={styles.confidenceRow}>
                   <Text style={styles.confidenceLabel}>Confidence</Text>
@@ -430,7 +438,7 @@ export default function App() {
                 {/* Success message */}
                 <View style={styles.successBanner}>
                   <Text style={styles.successBannerText}>
-                    ✅ Stage prediction complete! Go back to dashboard to use Deep Analysis.
+                    ✓ Saved. Next: map each zone with the scalp scan on the home screen.
                   </Text>
                 </View>
               </View>
@@ -560,15 +568,17 @@ export default function App() {
                 </View>
 
                 {zones3d && (
-                  <View style={styles.zoneGrid}>
-                    {Object.entries(zones3d).map(([zone, score]) => {
+                  <View style={{ gap: 10, marginTop: 6 }}>
+                    {Object.entries(zones3d).map(([zone, score], i) => {
                       const measured = result3d.zone_source?.[zone] === 'measured';
                       return (
-                        <View key={zone} style={[styles.zoneChip, !measured && styles.zoneChipEstimated]}>
-                          <View style={[styles.zoneChipDot, { backgroundColor: scoreToColor(score) }]} />
-                          <Text style={styles.zoneChipLabel}>{zone.replace('_', ' ')}</Text>
-                          <Text style={styles.zoneChipScore}>{(score * 100).toFixed(0)}%</Text>
-                          {!measured && <Text style={styles.zoneChipEst}>est.</Text>}
+                        <View key={zone} style={styles.zoneRow}>
+                          <Text style={styles.zoneRowLabel} numberOfLines={1}>{zoneLabel(zone)}</Text>
+                          <View style={{ flex: 1 }}>
+                            <GrowBar value={score} color={scoreToColor(score)} delay={i * 70} />
+                          </View>
+                          <Text style={styles.zoneRowValue}>{Math.round(score * 100)}%</Text>
+                          <Text style={styles.zoneRowEst}>{measured ? '' : 'est.'}</Text>
                         </View>
                       );
                     })}
@@ -612,198 +622,307 @@ export default function App() {
   // ═══════════════════════════════════════════════════════════════
   // HOME DASHBOARD
   // ═══════════════════════════════════════════════════════════════
+  const today = localDayKey();
+  const latestCheckIn = progressLog[progressLog.length - 1];
+  const doneToday = !!latestCheckIn && latestCheckIn.dayKey === today;
+  const dayToday = progressLog.length ? daysBetween(progressLog[0].dayKey, today) + 1 : 1;
+  const streak = currentStreak(progressLog, today);
+  const checkInDays = new Set(progressLog.map((e) => e.dayKey));
+  const lastSevenDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return { key: localDayKey(d), letter: d.toLocaleDateString(undefined, { weekday: 'narrow' }) };
+  });
+
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  const journey = [
+    { label: 'Survey', done: !!lifestyleData },
+    { label: 'Stage', done: !!stageResult },
+    { label: 'Scan', done: !!zones3d },
+    { label: 'Report', done: !!fullAnalysis },
+  ];
+
+  const nextStep = !lifestyleData
+    ? {
+      eyebrow: 'STEP 1 OF 4', title: 'Tell us about your routine',
+      body: '24 quick questions on sleep, diet, stress and family history.',
+      cta: 'Start survey', onPress: () => setScreen('lifestyle'),
+    }
+    : !stageResult
+      ? {
+        eyebrow: 'STEP 2 OF 4', title: 'Find your hair loss stage',
+        body: 'One scalp photo, classified on the 7-stage Norwood scale.',
+        cta: 'Upload a photo', onPress: () => setScreen('stage'),
+      }
+      : !zones3d
+        ? {
+          eyebrow: 'STEP 3 OF 4', title: 'Map your scalp zone by zone',
+          body: 'A guided camera takes up to 5 angles and measures hair density in each zone.',
+          cta: 'Start scan', onPress: () => setScreen('3d'),
+        }
+        : !fullAnalysis
+          ? {
+            eyebrow: 'STEP 4 OF 4', title: 'Get your personal report',
+            body: 'Your stage, zone densities and lifestyle combined into one AI report.',
+            cta: loading ? 'Generating report…' : 'Generate report', onPress: requestDeepAnalysis,
+          }
+          : !doneToday
+            ? {
+              eyebrow: 'DAILY CHECK-IN',
+              title: progressLog.length ? `Day ${dayToday} check-in is due` : 'Start daily monitoring',
+              body: progressLog.length
+                ? 'A quick scan keeps your progress chart up to date.'
+                : 'Scan once a day and see how much scalp is showing over time.',
+              cta: 'Check in now', onPress: () => setScreen('progress'),
+            }
+            : {
+              eyebrow: 'ALL DONE TODAY', title: 'You’re all caught up',
+              body: progressLog.length === 1
+                ? 'Baseline saved. Come back tomorrow for your first comparison.'
+                : 'Today’s check-in is saved. See how your scalp is changing.',
+              cta: 'View progress', onPress: () => setScreen('progress'),
+            };
+
+  const measuredZoneKeys = zones3d
+    ? Object.keys(zones3d).filter((z) => result3d?.zone_source?.[z] === 'measured')
+    : [];
+  const avgDensity = measuredZoneKeys.length
+    ? measuredZoneKeys.reduce((s, z) => s + zones3d[z], 0) / measuredZoneKeys.length
+    : null;
+
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar barStyle="dark-content" backgroundColor="#FAFBFD" />
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {/* Header */}
-          <View style={styles.headerContainer}>
-            <View style={styles.headerTitleRow}>
-              <View style={styles.headerBadge}>
-                <Text style={styles.headerBadgeText}>AI DIAGNOSTICS</Text>
+        <ScrollView contentContainerStyle={styles.homeScroll} showsVerticalScrollIndicator={false}>
+          {/* Top bar */}
+          <FadeIn style={styles.topBar}>
+            <View style={styles.brandRow}>
+              <View style={styles.brandMark}>
+                <Text style={styles.brandMarkText}>S</Text>
               </View>
-              <TouchableOpacity onPress={handleClearAllData} activeOpacity={0.7} style={styles.resetBtn}>
-                <Text style={styles.resetBtnText}>↻ Reset</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.title}>TrichoVision</Text>
-            <Text style={styles.subtitle}>Intelligent Hair Loss Analysis</Text>
-          </View>
-
-          {/* ── Lifestyle Survey Card ── */}
-          <TouchableOpacity
-            style={[styles.improveCard, lifestyleData && styles.improveCardDone]}
-            onPress={() => setScreen('lifestyle')}
-            activeOpacity={0.8}
-          >
-            <View style={styles.improveCardLeft}>
-              <IconBadge char={lifestyleData ? '✓' : '≡'} bg={lifestyleData ? '#E8FFF5' : '#EEF0FF'} color={lifestyleData ? '#0D9B72' : '#5B6AD0'} size={36} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.improveCardTitle}>
-                  {lifestyleData ? 'Lifestyle Data Collected' : 'Lifestyle Survey'}
-                </Text>
-                <Text style={styles.improveCardSubtitle}>
-                  {lifestyleData
-                    ? 'Tap to update your answers'
-                    : 'Required for Deep Analysis — answer 24 quick questions'}
-                </Text>
+              <View>
+                <Text style={styles.brandName}>SoftKebot</Text>
+                <Text style={styles.brandTag}>Scalp health, measured</Text>
               </View>
             </View>
-            <Text style={styles.improveCardArrow}>›</Text>
-          </TouchableOpacity>
+            <Tap onPress={confirmReset} style={styles.resetBtn} hitSlop={8}>
+              <Text style={styles.resetBtnText}>↻ Reset</Text>
+            </Tap>
+          </FadeIn>
 
-          {/* ── Feature Cards Grid ── */}
-          <View style={styles.featureGrid}>
-            {/* Card 1: Stage Prediction */}
-            <TouchableOpacity
-              style={[styles.featureCard, stageResult && styles.featureCardDone]}
-              onPress={() => setScreen('stage')}
-              activeOpacity={0.8}
-            >
-              <IconBadge char="S" bg="#EEF0FF" color="#5B6AD0" size={44} />
-              <Text style={styles.featureCardTitle}>Stage{'\n'}Prediction</Text>
-              <Text style={styles.featureCardDesc}>
-                {stageResult ? stageResult.predicted_stage.replace(' - ', '\n') : 'Upload 1 photo\nCNN classifier'}
-              </Text>
-              {stageResult ? (
-                <View style={styles.featureCardCompleteBadge}>
-                  <Text style={styles.featureCardCompleteText}>✓ Done</Text>
-                </View>
-              ) : (
-                <View style={styles.featureCardActionBadge}>
-                  <Text style={styles.featureCardActionText}>Start →</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-
-            {/* Card 2: 3D Visualization */}
-            <TouchableOpacity
-              style={[styles.featureCard, zones3d && styles.featureCardDone]}
-              onPress={() => setScreen('3d')}
-              activeOpacity={0.8}
-            >
-              <IconBadge char="3D" bg="#E8FBF5" color="#0D9B72" size={44} />
-              <Text style={styles.featureCardTitle}>3D Scalp{'\n'}Visualizer</Text>
-              <Text style={styles.featureCardDesc}>
-                {zones3d ? 'Heatmap ready!' : 'Guided camera\n5 angles'}
-              </Text>
-              {zones3d ? (
-                <View style={styles.featureCardCompleteBadge}>
-                  <Text style={styles.featureCardCompleteText}>✓ Done</Text>
-                </View>
-              ) : (
-                <View style={styles.featureCardActionBadge}>
-                  <Text style={styles.featureCardActionText}>Start →</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* ── Progress Tracker Card ── */}
-          {(() => {
-            const latest = progressLog[progressLog.length - 1];
-            const today = localDayKey();
-            const doneToday = latest && latest.dayKey === today;
-            const title = !latest
-              ? 'Start daily monitoring'
-              : doneToday
-                ? `Day ${dayNumber(progressLog, latest)} check-in done`
-                : `Day ${daysBetween(progressLog[0].dayKey, today) + 1} check-in due`;
-            const sub = !latest
-              ? 'Photograph your scalp each day and track how much scalp area is showing'
-              : doneToday
-                ? progressLog.length === 1
-                  ? 'Baseline saved. Come back tomorrow for your first comparison'
-                  : 'Tap to see your progress report'
-                : `Last check-in ${formatDayKey(latest.dayKey)}. Tap to continue`;
-            return (
-              <TouchableOpacity
-                style={[styles.progressCard, doneToday && styles.progressCardDone]}
-                onPress={() => setScreen('progress')}
-                activeOpacity={0.85}
+          {/* Hero: next step + journey */}
+          <FadeIn delay={60}>
+            <View style={styles.hero}>
+              <View style={styles.heroBlobLarge} />
+              <View style={styles.heroBlobSmall} />
+              <Text style={styles.heroGreeting}>{greeting}</Text>
+              <Text style={styles.heroEyebrow}>{nextStep.eyebrow}</Text>
+              <Text style={styles.heroTitle}>{nextStep.title}</Text>
+              <Text style={styles.heroBody}>{nextStep.body}</Text>
+              <Tap
+                style={[styles.heroCta, loading && styles.heroCtaDisabled]}
+                onPress={nextStep.onPress}
+                disabled={loading}
               >
-                <IconBadge char="↗" bg={doneToday ? '#E8FFF5' : '#EEF0FF'} color={doneToday ? '#0D9B72' : '#5B6AD0'} size={40} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.progressCardEyebrow}>PROGRESS TRACKER</Text>
-                  <Text style={styles.progressCardTitle}>{title}</Text>
-                  <Text style={styles.progressCardSub}>{sub}</Text>
+                {loading && <ActivityIndicator size="small" color="#16203A" style={{ marginRight: 8 }} />}
+                <Text style={styles.heroCtaText}>{nextStep.cta}</Text>
+                {!loading && <Text style={styles.heroCtaArrow}>→</Text>}
+              </Tap>
+
+              <View style={styles.journey}>
+                {journey.map((step, i) => (
+                  <React.Fragment key={step.label}>
+                    {i > 0 && <View style={[styles.journeyLine, journey[i - 1].done && styles.journeyLineDone]} />}
+                    <View style={styles.journeyStep}>
+                      <View style={[styles.journeyDot, step.done && styles.journeyDotDone]}>
+                        <Text style={[styles.journeyDotText, step.done && styles.journeyDotTextDone]}>
+                          {step.done ? '✓' : i + 1}
+                        </Text>
+                      </View>
+                      <Text style={[styles.journeyLabel, step.done && styles.journeyLabelDone]}>{step.label}</Text>
+                    </View>
+                  </React.Fragment>
+                ))}
+              </View>
+            </View>
+          </FadeIn>
+
+          {/* Latest scan summary */}
+          {zones3d && (
+            <FadeIn delay={120}>
+              <Tap style={styles.scanCard} onPress={() => openViewer(zones3d, 'home')} scaleTo={0.98}>
+                <View style={styles.scanCardHead}>
+                  <View>
+                    <Text style={styles.sectionEyebrow}>LATEST SCAN</Text>
+                    <Text style={styles.scanCardTitle}>Hair density by zone</Text>
+                  </View>
+                  {avgDensity != null && (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.scanAvg, { color: scoreToColor(avgDensity) }]}>
+                        {Math.round(avgDensity * 100)}%
+                      </Text>
+                      <Text style={styles.scanAvgLabel}>average</Text>
+                    </View>
+                  )}
                 </View>
-                <Text style={styles.improveCardArrow}>›</Text>
-              </TouchableOpacity>
-            );
-          })()}
-
-          {/* ── Deep Analysis Card ── */}
-          <TouchableOpacity
-            style={[
-              styles.deepAnalysisCard,
-              deepAnalysisUnlocked && styles.deepAnalysisCardUnlocked,
-              !deepAnalysisUnlocked && styles.deepAnalysisCardLocked,
-            ]}
-            onPress={deepAnalysisUnlocked ? requestDeepAnalysis : null}
-            disabled={!deepAnalysisUnlocked || loading}
-            activeOpacity={deepAnalysisUnlocked ? 0.85 : 1}
-          >
-            <View style={styles.deepAnalysisTop}>
-              <IconBadge
-                char={deepAnalysisUnlocked ? 'DA' : '⊘'}
-                bg={deepAnalysisUnlocked ? '#E8FBF5' : '#F5F6FB'}
-                color={deepAnalysisUnlocked ? '#0D9B72' : '#8B91A8'}
-                size={36}
-              />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.deepAnalysisTitle}>
-                  {loading ? 'Generating Report...' : 'Deep Lifestyle Analysis'}
-                </Text>
-                <Text style={styles.deepAnalysisSubtitle}>
-                  {deepAnalysisUnlocked
-                    ? 'CNN Stage + Lifestyle → Groq AI comprehensive report'
-                    : 'Complete Survey & Stage Prediction to unlock'}
-                </Text>
-              </View>
-            </View>
-
-            {/* Progress checklist */}
-            <View style={styles.deepAnalysisChecklist}>
-              <View style={styles.checkItem}>
-                <CheckDot done={!!lifestyleData} />
-                <Text style={[styles.checkText, lifestyleData && styles.checkTextDone]}>
-                  Lifestyle Survey
-                </Text>
-              </View>
-              <View style={styles.checkItem}>
-                <CheckDot done={!!stageResult} />
-                <Text style={[styles.checkText, stageResult && styles.checkTextDone]}>
-                  Stage Prediction
-                </Text>
-              </View>
-            </View>
-
-            {loading && (
-              <View style={{ marginTop: 12, alignItems: 'center' }}>
-                <ActivityIndicator size="small" color="#5B6AD0" />
-              </View>
-            )}
-          </TouchableOpacity>
-
-          {/* View existing report */}
-          {fullAnalysis && (
-            <TouchableOpacity
-              style={styles.viewReportBtn}
-              onPress={() => setScreen('fullResult')}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.viewReportBtnText}>View Full Report</Text>
-            </TouchableOpacity>
+                {Object.entries(zones3d).map(([zone, score], i) => {
+                  const measured = result3d?.zone_source?.[zone] === 'measured';
+                  return (
+                    <View key={zone} style={styles.zoneRow}>
+                      <Text style={styles.zoneRowLabel} numberOfLines={1}>{zoneLabel(zone)}</Text>
+                      <View style={{ flex: 1 }}>
+                        <GrowBar value={score} color={scoreToColor(score)} delay={200 + i * 60} />
+                      </View>
+                      <Text style={styles.zoneRowValue}>{Math.round(score * 100)}%</Text>
+                      <Text style={styles.zoneRowEst}>{measured ? '' : 'est.'}</Text>
+                    </View>
+                  );
+                })}
+                <Text style={styles.scanCardLink}>Open 3D head →</Text>
+              </Tap>
+            </FadeIn>
           )}
 
-          <View style={{ height: 50 }} />
+          {/* Daily monitoring */}
+          <FadeIn delay={180}>
+            <Tap style={styles.progressCard} onPress={() => setScreen('progress')} scaleTo={0.98}>
+              <View style={styles.progressCardHead}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sectionEyebrow}>DAILY MONITORING</Text>
+                  <Text style={styles.progressCardTitle}>
+                    {!latestCheckIn
+                      ? 'Track your scalp every day'
+                      : doneToday
+                        ? `Day ${dayNumber(progressLog, latestCheckIn)} done`
+                        : `Day ${dayToday} is waiting`}
+                  </Text>
+                  <Text style={styles.progressCardSub}>
+                    {!latestCheckIn
+                      ? 'Your first scan becomes the baseline.'
+                      : doneToday && progressLog.length === 1
+                        ? 'Baseline saved. Come back tomorrow.'
+                        : doneToday
+                          ? 'Tap to see what changed.'
+                          : `Last check-in ${formatDayKey(latestCheckIn.dayKey)}`}
+                  </Text>
+                </View>
+                {streak > 0 && (
+                  <View style={styles.streakChip}>
+                    <Text style={styles.streakNum}>{streak}</Text>
+                    <Text style={styles.streakLabel}>day{streak === 1 ? '' : 's'}{'\n'}streak</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.weekRow}>
+                {lastSevenDays.map((d) => {
+                  const done = checkInDays.has(d.key);
+                  const isToday = d.key === today;
+                  return (
+                    <View key={d.key} style={styles.weekDay}>
+                      <View style={[styles.weekDot, done && styles.weekDotDone, isToday && !done && styles.weekDotToday]}>
+                        {done && <Text style={styles.weekDotCheck}>✓</Text>}
+                      </View>
+                      <Text style={[styles.weekLetter, isToday && styles.weekLetterToday]}>{d.letter}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </Tap>
+          </FadeIn>
+
+          {/* Tools */}
+          <FadeIn delay={240}>
+            <Text style={styles.sectionTitle}>Tools</Text>
+            <View style={styles.featureGrid}>
+              <Tap style={styles.featureCard} onPress={() => setScreen('stage')}>
+                <View style={[styles.featureIcon, { backgroundColor: '#EEF0FF' }]}>
+                  <Text style={[styles.featureIconText, { color: '#5B6AD0' }]}>N</Text>
+                </View>
+                <Text style={styles.featureCardTitle}>Stage check</Text>
+                <Text style={styles.featureCardDesc} numberOfLines={2}>
+                  {stageResult ? stageResult.predicted_stage : 'Norwood stage from one photo'}
+                </Text>
+                <Text style={[styles.featureStatus, stageResult && styles.featureStatusDone]}>
+                  {stageResult ? '✓ Done' : 'Start →'}
+                </Text>
+              </Tap>
+              <Tap style={styles.featureCard} onPress={() => setScreen('3d')}>
+                <View style={[styles.featureIcon, { backgroundColor: '#E8FBF5' }]}>
+                  <Text style={[styles.featureIconText, { color: '#0D9B72' }]}>3D</Text>
+                </View>
+                <Text style={styles.featureCardTitle}>Scalp scan</Text>
+                <Text style={styles.featureCardDesc} numberOfLines={2}>
+                  {zones3d ? `${measuredZoneKeys.length} of 6 zones measured` : 'Guided camera, 5 angles'}
+                </Text>
+                <Text style={[styles.featureStatus, zones3d && styles.featureStatusDone]}>
+                  {zones3d ? '✓ Done' : 'Start →'}
+                </Text>
+              </Tap>
+            </View>
+            <View style={styles.featureGrid}>
+              <Tap style={styles.featureCard} onPress={() => setScreen('lifestyle')}>
+                <View style={[styles.featureIcon, { backgroundColor: '#FFF4E5' }]}>
+                  <Text style={[styles.featureIconText, { color: '#C77700' }]}>≡</Text>
+                </View>
+                <Text style={styles.featureCardTitle}>Lifestyle</Text>
+                <Text style={styles.featureCardDesc} numberOfLines={2}>
+                  {lifestyleData ? 'Answers saved. Tap to edit' : '24 quick questions'}
+                </Text>
+                <Text style={[styles.featureStatus, lifestyleData && styles.featureStatusDone]}>
+                  {lifestyleData ? '✓ Done' : 'Start →'}
+                </Text>
+              </Tap>
+              <Tap
+                style={[styles.featureCard, !deepAnalysisUnlocked && styles.featureCardLocked]}
+                onPress={fullAnalysis ? () => setScreen('fullResult') : requestDeepAnalysis}
+                disabled={(!deepAnalysisUnlocked && !fullAnalysis) || loading}
+              >
+                <View style={[styles.featureIcon, { backgroundColor: deepAnalysisUnlocked ? '#F3EDFF' : '#F0F1F6' }]}>
+                  <Text style={[styles.featureIconText, { color: deepAnalysisUnlocked ? '#7A4FD6' : '#A0A5BA' }]}>
+                    {deepAnalysisUnlocked ? 'AI' : '⊘'}
+                  </Text>
+                </View>
+                <Text style={styles.featureCardTitle}>AI report</Text>
+                <Text style={styles.featureCardDesc} numberOfLines={2}>
+                  {fullAnalysis
+                    ? 'Tap to read your report'
+                    : deepAnalysisUnlocked
+                      ? 'Stage + lifestyle, explained'
+                      : 'Needs survey and stage'}
+                </Text>
+                <Text style={[styles.featureStatus, fullAnalysis && styles.featureStatusDone]}>
+                  {loading ? 'Working…' : fullAnalysis ? 'Open →' : deepAnalysisUnlocked ? 'Generate →' : 'Locked'}
+                </Text>
+              </Tap>
+            </View>
+          </FadeIn>
+
+          {fullAnalysis && deepAnalysisUnlocked && (
+            <FadeIn delay={300}>
+              <Tap style={styles.regenBtn} onPress={requestDeepAnalysis} disabled={loading}>
+                <Text style={styles.regenBtnText}>{loading ? 'Generating report…' : '↻ Regenerate report with latest data'}</Text>
+              </Tap>
+            </FadeIn>
+          )}
+
+          <Text style={styles.disclaimer}>
+            For information only. SoftKebot is not a medical diagnosis.
+          </Text>
         </ScrollView>
       </SafeAreaView>
     </SafeAreaProvider>
   );
 }
+
+function zoneLabel(zone) {
+  return ZONE_LABELS[zone] || zone.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+}
+
+// Norwood stages 1–7, healthy → advanced
+const NORWOOD_COLORS = ['#1565C0', '#1E88E5', '#26C6DA', '#D4E157', '#FFB300', '#FF7043', '#E53935'];
 
 // ── Utility: score → hex color ──────────────────────────────────
 function scoreToColor(score) {
@@ -858,26 +977,6 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     width: '100%',
   },
-  headerTitleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  resetBtn: {
-    backgroundColor: '#FFEFEF',
-    borderWidth: 1,
-    borderColor: '#FFD5D5',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-  },
-  resetBtnText: {
-    color: '#D84B4B',
-    fontSize: 11,
-    fontWeight: '700',
-  },
   headerBadge: {
     backgroundColor: '#EEF0FF',
     borderWidth: 1,
@@ -906,176 +1005,135 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // ── Improve Accuracy / Lifestyle Card ──
-  improveCard: {
+  // ── Home ──
+  homeScroll: {
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 32,
+    maxWidth: 480,
     width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F0EDFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#D0D5F6',
-    padding: 14,
-    marginBottom: 20,
+    alignSelf: 'center',
+    gap: 16,
   },
-  improveCardDone: {
-    backgroundColor: '#E8FFF5',
-    borderColor: '#A0E8CC',
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  brandMark: {
+    width: 40, height: 40, borderRadius: 12, backgroundColor: '#16203A',
+    justifyContent: 'center', alignItems: 'center',
   },
-  improveCardLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
+  brandMarkText: { color: '#9FE3C8', fontSize: 20, fontWeight: '900' },
+  brandName: { color: '#16203A', fontSize: 22, fontWeight: '900', letterSpacing: 0.2 },
+  brandTag: { color: '#8B91A8', fontSize: 12, fontWeight: '600' },
+  resetBtn: {
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECEEF5',
+    borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7,
   },
-  improveCardIcon: { fontSize: 24 },
-  improveCardTitle: { color: '#1A1D2E', fontSize: 14, fontWeight: '700' },
-  improveCardSubtitle: { color: '#6B7291', fontSize: 12, marginTop: 2 },
-  improveCardArrow: { color: '#5B6AD0', fontSize: 28, fontWeight: '300', marginLeft: 8 },
+  resetBtnText: { color: '#6B7291', fontSize: 12, fontWeight: '700' },
 
-  // ── Feature Cards Grid ──
-  featureGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    width: '100%',
-    marginBottom: 16,
+  hero: {
+    backgroundColor: '#16203A', borderRadius: 26, padding: 22, overflow: 'hidden',
+    shadowColor: '#16203A', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.25, shadowRadius: 20, elevation: 8,
   },
-  featureCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#ECEEF5',
-    padding: 18,
-    alignItems: 'center',
-    shadowColor: '#5B6AD0',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-    minHeight: 180,
-    justifyContent: 'space-between',
+  heroBlobLarge: {
+    position: 'absolute', width: 220, height: 220, borderRadius: 110,
+    backgroundColor: '#5B6AD0', opacity: 0.35, top: -90, right: -70,
   },
-  featureCardDone: {
-    borderColor: '#A0E8CC',
-    backgroundColor: '#F8FFFC',
+  heroBlobSmall: {
+    position: 'absolute', width: 110, height: 110, borderRadius: 55,
+    backgroundColor: '#9FE3C8', opacity: 0.16, top: 70, right: -30,
   },
-  featureCardIcon: {
-    fontSize: 36,
-    marginBottom: 8,
+  heroGreeting: { color: '#C9CFE8', fontSize: 14, fontWeight: '600' },
+  heroEyebrow: { color: '#9FE3C8', fontSize: 11, fontWeight: '800', letterSpacing: 1.6, marginTop: 14 },
+  heroTitle: { color: '#FFFFFF', fontSize: 26, fontWeight: '800', lineHeight: 32, marginTop: 6, maxWidth: '92%' },
+  heroBody: { color: '#C9CFE8', fontSize: 14, lineHeight: 20, marginTop: 8, maxWidth: '92%' },
+  heroCta: {
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
+    backgroundColor: '#FFFFFF', borderRadius: 16, paddingHorizontal: 18, paddingVertical: 12, marginTop: 18,
   },
-  featureCardTitle: {
-    color: '#1A1D2E',
-    fontSize: 15,
-    fontWeight: '800',
-    textAlign: 'center',
-    letterSpacing: 0.2,
-    marginBottom: 4,
+  heroCtaDisabled: { opacity: 0.7 },
+  heroCtaText: { color: '#16203A', fontSize: 15, fontWeight: '800' },
+  heroCtaArrow: { color: '#5B6AD0', fontSize: 16, fontWeight: '900', marginLeft: 8 },
+  journey: {
+    flexDirection: 'row', alignItems: 'flex-start', marginTop: 22,
+    paddingTop: 18, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)',
   },
-  featureCardDesc: {
-    color: '#8B91A8',
-    fontSize: 11,
-    textAlign: 'center',
-    lineHeight: 16,
-    marginBottom: 10,
+  journeyStep: { alignItems: 'center', width: 52 },
+  journeyLine: { flex: 1, height: 2, backgroundColor: 'rgba(255,255,255,0.15)', marginTop: 13 },
+  journeyLineDone: { backgroundColor: '#9FE3C8' },
+  journeyDot: {
+    width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)',
+    justifyContent: 'center', alignItems: 'center',
   },
-  featureCardActionBadge: {
-    backgroundColor: '#EEF0FF',
-    borderWidth: 1,
-    borderColor: '#D0D5F6',
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  featureCardActionText: {
-    color: '#5B6AD0',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  featureCardCompleteBadge: {
-    backgroundColor: '#E8FFF5',
-    borderWidth: 1,
-    borderColor: '#A0E8CC',
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  featureCardCompleteText: {
-    color: '#0D9B72',
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  journeyDotDone: { backgroundColor: '#9FE3C8', borderColor: '#9FE3C8' },
+  journeyDotText: { color: '#C9CFE8', fontSize: 12, fontWeight: '800' },
+  journeyDotTextDone: { color: '#16203A' },
+  journeyLabel: { color: '#8C94B8', fontSize: 11, fontWeight: '700', marginTop: 6 },
+  journeyLabelDone: { color: '#FFFFFF' },
 
-  // ── Progress Tracker Card ──
+  sectionEyebrow: { color: '#5B6AD0', fontSize: 10, fontWeight: '800', letterSpacing: 1.4 },
+  sectionTitle: { color: '#16203A', fontSize: 17, fontWeight: '800', marginBottom: 10, marginTop: 4 },
+
+  scanCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 22, borderWidth: 1, borderColor: '#ECEEF5', padding: 18, gap: 10,
+    shadowColor: '#5B6AD0', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 12, elevation: 3,
+  },
+  scanCardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
+  scanCardTitle: { color: '#16203A', fontSize: 17, fontWeight: '800', marginTop: 3 },
+  scanAvg: { fontSize: 30, fontWeight: '900', lineHeight: 34 },
+  scanAvgLabel: { color: '#8B91A8', fontSize: 11, fontWeight: '600' },
+  zoneRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  zoneRowLabel: { width: 100, color: '#4A5068', fontSize: 12, fontWeight: '600' },
+  zoneRowValue: { width: 38, textAlign: 'right', color: '#16203A', fontSize: 12, fontWeight: '800' },
+  zoneRowEst: { width: 22, color: '#A0A5BA', fontSize: 10, fontWeight: '700' },
+  scanCardLink: { color: '#5B6AD0', fontSize: 13, fontWeight: '800', marginTop: 4 },
+
   progressCard: {
-    width: '100%', flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#FFFFFF', borderRadius: 18, borderWidth: 1, borderColor: '#D0D5F6',
-    padding: 16, marginBottom: 16,
-    shadowColor: '#5B6AD0', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3,
+    backgroundColor: '#FFFFFF', borderRadius: 22, borderWidth: 1, borderColor: '#ECEEF5', padding: 18,
+    shadowColor: '#5B6AD0', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 12, elevation: 3,
   },
-  progressCardDone: { borderColor: '#A0E8CC', backgroundColor: '#F8FFFC' },
-  progressCardEyebrow: { color: '#5B6AD0', fontSize: 10, fontWeight: '800', letterSpacing: 1.4 },
-  progressCardTitle: { color: '#1A1D2E', fontSize: 15, fontWeight: '800', marginTop: 2 },
-  progressCardSub: { color: '#6B7291', fontSize: 12, marginTop: 2, lineHeight: 17 },
+  progressCardHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  progressCardTitle: { color: '#16203A', fontSize: 17, fontWeight: '800', marginTop: 3 },
+  progressCardSub: { color: '#6B7291', fontSize: 13, marginTop: 3, lineHeight: 18 },
+  streakChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#FFF4E5', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8,
+  },
+  streakNum: { color: '#E07800', fontSize: 24, fontWeight: '900' },
+  streakLabel: { color: '#C77700', fontSize: 10, fontWeight: '800', lineHeight: 12 },
+  weekRow: {
+    flexDirection: 'row', justifyContent: 'space-between', marginTop: 16,
+    paddingTop: 14, borderTopWidth: 1, borderTopColor: '#F0F1F6',
+  },
+  weekDay: { alignItems: 'center', gap: 6 },
+  weekDot: {
+    width: 30, height: 30, borderRadius: 15, backgroundColor: '#F3F4FA',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  weekDotDone: { backgroundColor: '#0D9B72' },
+  weekDotToday: { borderWidth: 2, borderColor: '#5B6AD0', borderStyle: 'dashed' },
+  weekDotCheck: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  weekLetter: { color: '#A0A5BA', fontSize: 11, fontWeight: '700' },
+  weekLetterToday: { color: '#5B6AD0' },
 
-  // ── Deep Analysis Card ──
-  deepAnalysisCard: {
-    width: '100%',
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 18,
-    marginBottom: 12,
+  featureGrid: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+  featureCard: {
+    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 20, borderWidth: 1, borderColor: '#ECEEF5', padding: 16,
+    shadowColor: '#5B6AD0', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
-  deepAnalysisCardUnlocked: {
-    backgroundColor: '#E8FBF5',
-    borderColor: '#A7EDD8',
-  },
-  deepAnalysisCardLocked: {
-    backgroundColor: '#F5F6FB',
-    borderColor: '#ECEEF5',
-  },
-  deepAnalysisTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  deepAnalysisIcon: { fontSize: 28 },
-  deepAnalysisTitle: { color: '#1A1D2E', fontSize: 15, fontWeight: '800' },
-  deepAnalysisSubtitle: { color: '#6B7291', fontSize: 12, marginTop: 2 },
-  deepAnalysisChecklist: {
-    flexDirection: 'row',
-    gap: 20,
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.05)',
-  },
-  checkItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  checkIcon: { fontSize: 16 },
-  checkText: { color: '#8B91A8', fontSize: 12, fontWeight: '600' },
-  checkTextDone: { color: '#0D9B72' },
+  featureCardLocked: { backgroundColor: '#F8F9FC' },
+  featureIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  featureIconText: { fontSize: 15, fontWeight: '900' },
+  featureCardTitle: { color: '#16203A', fontSize: 15, fontWeight: '800' },
+  featureCardDesc: { color: '#8B91A8', fontSize: 12, lineHeight: 16, marginTop: 3, minHeight: 32 },
+  featureStatus: { color: '#5B6AD0', fontSize: 12, fontWeight: '800', marginTop: 10 },
+  featureStatusDone: { color: '#0D9B72' },
 
-  // ── View Report Button ──
-  viewReportBtn: {
-    width: '100%',
-    backgroundColor: '#5B6AD0',
-    paddingVertical: 15,
-    borderRadius: 16,
-    alignItems: 'center',
-    marginBottom: 12,
-    shadowColor: '#5B6AD0',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 8,
+  regenBtn: {
+    borderWidth: 1, borderColor: '#D0D5F6', backgroundColor: '#EEF0FF',
+    borderRadius: 16, paddingVertical: 13, alignItems: 'center',
   },
-  viewReportBtnText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
+  regenBtnText: { color: '#5B6AD0', fontSize: 13, fontWeight: '800' },
+  disclaimer: { color: '#A0A5BA', fontSize: 11, textAlign: 'center', marginTop: 8 },
 
   // ── Single Image Slot (Stage Prediction) ──
   singleImageSlot: {
@@ -1319,6 +1377,12 @@ const styles = StyleSheet.create({
   geminiTagText: { color: '#0D9B72', fontSize: 10, fontWeight: '700' },
   resultStage: { fontSize: 22, fontWeight: '800', color: '#1A1D2E', marginBottom: 8, letterSpacing: 0.2 },
   resultSummary: { color: '#6B7291', fontSize: 13, lineHeight: 19, marginBottom: 14, fontStyle: 'italic' },
+  norwood: { flexDirection: 'row', gap: 5, marginBottom: 18, marginTop: 4 },
+  norwoodCell: { flex: 1, alignItems: 'center', gap: 5 },
+  norwoodBar: { width: '100%', height: 10, borderRadius: 5 },
+  norwoodBarActive: { height: 16, borderRadius: 6, marginTop: -3 },
+  norwoodNum: { color: '#A0A5BA', fontSize: 11, fontWeight: '700' },
+  norwoodNumActive: { color: '#16203A', fontWeight: '900' },
   confidenceRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   confidenceLabel: { color: '#6B7291', fontSize: 13, fontWeight: '600' },
   confidenceValue: { color: '#0D9B72', fontSize: 14, fontWeight: '800' },

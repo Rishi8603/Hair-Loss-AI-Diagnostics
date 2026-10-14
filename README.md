@@ -1,5 +1,5 @@
 ---
-title: TrichoVision Hair Loss API
+title: SoftKebot Hair Loss API
 emoji: 🧠
 colorFrom: indigo
 colorTo: green
@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 ---
 
-# 🧠 TrichoVision — AI Hair Fall Stage Classifier
+# 🧠 SoftKebot — AI Hair Fall Stage Classifier
 
 <div align="center">
 
@@ -47,7 +47,7 @@ app_port: 7860
 
 ## 🔍 Overview
 
-**TrichoVision** is a software-only adaptation of the KEBOT robotic hair transplant analysis system. Instead of relying on a $30,000+ robotic arm, it uses a **USB dermatoscope** + **deep learning** to classify hair fall stages based on the **Norwood-Hamilton Scale**.
+**SoftKebot** is a software-only adaptation of the KEBOT robotic hair transplant analysis system. Instead of relying on a $30,000+ robotic arm, it uses a **USB dermatoscope** + **deep learning** to classify hair fall stages based on the **Norwood-Hamilton Scale**.
 
 The system takes a scalp image as input and outputs a predicted hair fall stage (1–7) with a confidence percentage — accessible from any smartphone via a clean mobile app.
 
@@ -75,7 +75,7 @@ The system takes a scalp image as input and outputs a predicted hair fall stage 
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                  TRICHOVISION SYSTEM                │
+│                  SOFTKEBOT SYSTEM                │
 ├────────────────────┬────────────────────────────────┤
 │   MOBILE APP       │        BACKEND SERVER           │
 │  React Native      │  FastAPI + ONNX Runtime         │
@@ -388,6 +388,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 **Built with ❤️ as a Final Year Deep Learning Project**
 
-*TrichoVision — Bridging AI and Clinical Hair Analysis*
+*SoftKebot — Bridging AI and Clinical Hair Analysis*
 
 </div>
